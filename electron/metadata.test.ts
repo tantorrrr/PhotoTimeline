@@ -84,21 +84,33 @@ describe('resolveDate', () => {
     expect(r.ts).toBe(folderOld);
   });
 
-  it('prefers folder over EXIF when folder is meaningfully older (edited file in dated folder)', () => {
+  it('folder wins over EXIF whenever folder is set', () => {
+    // folder date + same-day EXIF -> folder still wins (user-requested rule)
     const r = resolveDate(null, exifNew, folderOld, mtime);
     expect(r.source).toBe('folder');
     expect(r.ts).toBe(folderOld);
   });
 
-  it('prefers filename over folder when both are older than EXIF (filename is more precise)', () => {
+  it('folder wins over filename whenever folder is set', () => {
     const r = resolveDate(filenameOld, exifNew, folderOld, mtime);
-    expect(r.source).toBe('filename');
+    expect(r.source).toBe('folder');
+  });
+
+  it('falls back to EXIF when folder has no date', () => {
+    const r = resolveDate(null, exifNew, null, mtime);
+    expect(r.source).toBe('exif');
+    expect(r.ts).toBe(exifNew);
   });
 });
 
 describe('parseFolderDate', () => {
   // Use day-month-year tuples [Y, M, D] for unambiguous expectation; null = no match.
   const cases: [string, [number, number, number] | null][] = [
+    // ISO YYYY-MM-DD (year-first) - highest priority
+    ['2014-05-30', [2014, 5, 30]],
+    ['2019.12.31_archive', [2019, 12, 31]],
+    ['Trip 2020-01-15', [2020, 1, 15]],
+    ['2023_06_07', [2023, 6, 7]],
     // Full DD-MM-YYYY with various separators
     ['21-10-2012', [2012, 10, 21]],
     ['10.3.2016', [2016, 3, 10]],

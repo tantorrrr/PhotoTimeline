@@ -177,18 +177,19 @@ export async function scanFolder(
 
           const existing = imageQueries.getByPath(file);
 
-          // Hot path: row exists, mtime unchanged. Just verify the
-          // thumbnail file is on disk; if it isn't, requeue without
-          // re-reading EXIF or recomputing the date.
+          // Hot path: row exists, mtime unchanged. Skip the EXIF read and
+          // date resolution. If the thumbnail is genuinely cached we're
+          // done; otherwise (status=pending, error, or missing file)
+          // requeue so the new extraction code gets a chance to retry.
           if (existing && existing.mtime === mtime) {
-            if (existing.thumb_status === 'ready') {
-              if (!(await fileExists(thumbPathFor(file)))) {
-                imageQueries.setThumbStatus(existing.id, 'pending');
-                queueThumb(existing.id, file, ext);
-              }
-            } else if (existing.thumb_status === 'pending') {
-              queueThumb(existing.id, file, ext);
+            const cached =
+              existing.thumb_status === 'ready' &&
+              (await fileExists(thumbPathFor(file)));
+            if (cached) return;
+            if (existing.thumb_status !== 'pending') {
+              imageQueries.setThumbStatus(existing.id, 'pending');
             }
+            queueThumb(existing.id, file, ext);
             return;
           }
 

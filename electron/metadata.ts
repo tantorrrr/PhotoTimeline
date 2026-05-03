@@ -99,7 +99,16 @@ export function parseFolderDate(folderName: string): number | null {
   const name = folderName.trim();
   if (!name) return null;
 
-  // 1. Day-Month-FullYear (separators: - . / _ or one+ space)
+  // 1. ISO YYYY-MM-DD (year-first, day last). Most precise format - try first
+  //    so it isn't misread as the day-first patterns.
+  //    e.g. "2014-05-30", "Trip 2020-01-15", "2019.12.31_archive"
+  const mIso = name.match(/(?<!\d)(\d{4})[-./_](\d{1,2})[-./_](\d{1,2})(?!\d)/);
+  if (mIso) {
+    const ts = isValidDate(+mIso[1], +mIso[2], +mIso[3]);
+    if (ts !== null) return ts;
+  }
+
+  // 2. Day-Month-FullYear (separators: - . / _ or one+ space)
   //    e.g. "21-10-2012", "30.12.2012", "26 12 2014", "phuot 5 2 2015",
   //    "tot nghiep k5 - dot 1 - 20-06-2015"
   const m1 = name.match(/(?<!\d)(\d{1,2})[-./_ ]+(\d{1,2})[-./_ ]+(\d{4})(?!\d)/);
@@ -181,14 +190,16 @@ const ONE_DAY_MS = 86_400_000;
 
 /**
  * Combine the four candidate sources into a single resolved date.
- * Confidence ordering: EXIF == filename > folder > mtime.
  *
- * The "edited file" heuristic still applies: if any older trustworthy
- * source (filename or folder) is more than 1 day older than EXIF, we
- * prefer the older one - the assumption is the file was edited or
- * converted and EXIF got overwritten while the original capture date
- * survives in the name or in the parent folder. When both filename and
- * folder are older than EXIF, filename wins because it's more precise.
+ * Priority (per user requirement): folder name wins over file-internal
+ * sources whenever it parses out a date. The motivation is that folder
+ * structure is the most deliberate organisation signal a user gives -
+ * `tet 2019/IMG_001.JPG` is meant to live in 2019 even when EXIF was
+ * rewritten to today's date by some converter or screenshot tool.
+ *
+ * When no folder date is detectable we fall back to the file itself:
+ * EXIF, with the existing edited-file heuristic that promotes a
+ * meaningfully older filename date over a suspiciously new EXIF.
  */
 export function resolveDate(
   filenameDate: number | null,
@@ -196,17 +207,16 @@ export function resolveDate(
   folderDate: number | null,
   mtime: number
 ): ResolvedDate {
+  if (folderDate !== null) {
+    return { ts: folderDate, source: 'folder' };
+  }
   if (exifDate !== null) {
     if (filenameDate !== null && filenameDate < exifDate - ONE_DAY_MS) {
       return { ts: filenameDate, source: 'filename' };
     }
-    if (folderDate !== null && folderDate < exifDate - ONE_DAY_MS) {
-      return { ts: folderDate, source: 'folder' };
-    }
     return { ts: exifDate, source: 'exif' };
   }
   if (filenameDate !== null) return { ts: filenameDate, source: 'filename' };
-  if (folderDate !== null) return { ts: folderDate, source: 'folder' };
   return { ts: mtime, source: 'mtime' };
 }
 
