@@ -1,0 +1,7 @@
+node_modules
+out
+dist
+*.log
+.vite
+manual_download
+package-lock.json
