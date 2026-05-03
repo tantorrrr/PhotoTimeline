@@ -1,6 +1,6 @@
 import exifr from 'exifr';
 
-export type DateSource = 'filename' | 'exif' | 'mtime';
+export type DateSource = 'filename' | 'exif' | 'folder' | 'mtime';
 
 export interface ResolvedDate {
   ts: number;
@@ -84,6 +84,80 @@ export function parseFilenameDate(filename: string): number | null {
   return null;
 }
 
+/**
+ * Try to extract a capture date from a folder name. Many users organise
+ * photos into folders named like `21-10-2012`, `tet 2019`, `phuot 5 2 2015`,
+ * `dienthoai-06-2014`, `Ki yeu - 30 - 5 -15`. The convention is Vietnamese
+ * day-first (DD-MM-YYYY); we fall back to month-first only when DD-MM is
+ * not a valid calendar date.
+ *
+ * Less precise than EXIF: month-only folders pin the date to mid-month
+ * (day 15) and year-only folders pin to July 1, so they sort in the middle
+ * of the period rather than dominating January.
+ */
+export function parseFolderDate(folderName: string): number | null {
+  const name = folderName.trim();
+  if (!name) return null;
+
+  // 1. Day-Month-FullYear (separators: - . / _ or one+ space)
+  //    e.g. "21-10-2012", "30.12.2012", "26 12 2014", "phuot 5 2 2015",
+  //    "tot nghiep k5 - dot 1 - 20-06-2015"
+  const m1 = name.match(/(?<!\d)(\d{1,2})[-./_ ]+(\d{1,2})[-./_ ]+(\d{4})(?!\d)/);
+  if (m1) {
+    const ts = tryDayMonthYear(+m1[1], +m1[2], +m1[3]);
+    if (ts !== null) return ts;
+  }
+
+  // 2. Day-Month-ShortYear
+  //    e.g. "03-09-13", "16-12-12", "anh-6-2-13", "Ki yeu - 30 - 5 -15",
+  //    "30-08-13.nhaucuoinam.kidsDiThi"
+  const m2 = name.match(/(?<!\d)(\d{1,2})[-./_ ]+(\d{1,2})[-./_ ]+(\d{2})(?!\d)/);
+  if (m2) {
+    const ts = tryDayMonthYear(+m2[1], +m2[2], expandShortYear(+m2[3]));
+    if (ts !== null) return ts;
+  }
+
+  // 3. Month-FullYear (day defaults to 15)
+  //    e.g. "dienthoai-06-2014", "bocapvang 1-2015", "triptrip 2-2015"
+  const m3 = name.match(/(?<!\d)(\d{1,2})[-./_ ]+(\d{4})(?!\d)/);
+  if (m3) {
+    const ts = tryMonthYear(+m3[1], +m3[2]);
+    if (ts !== null) return ts;
+  }
+
+  // 4. Year only (day defaults to July 1)
+  //    e.g. "tet 2019", "noel 2014", "anhTet-2013", "da banh liver 2012"
+  const m4 = name.match(/(?<!\d)(19\d{2}|20\d{2})(?!\d)/);
+  if (m4) {
+    const y = +m4[1];
+    if (y >= MIN_YEAR && y <= MAX_YEAR) {
+      return new Date(y, 6, 1, 12, 0, 0).getTime();
+    }
+  }
+  return null;
+}
+
+function expandShortYear(yy: number): number {
+  const cur2 = new Date().getFullYear() % 100;
+  return yy <= cur2 + 1 ? 2000 + yy : 1900 + yy;
+}
+
+function tryDayMonthYear(a: number, b: number, y: number): number | null {
+  // Vietnamese convention: DD-MM-YYYY first
+  const dm = isValidDate(y, b, a);
+  if (dm !== null) return dm;
+  // Fallback to MM-DD-YYYY when day-first doesn't validate
+  const md = isValidDate(y, a, b);
+  if (md !== null) return md;
+  return null;
+}
+
+function tryMonthYear(m: number, y: number): number | null {
+  if (m < 1 || m > 12) return null;
+  if (y < MIN_YEAR || y > MAX_YEAR) return null;
+  return new Date(y, m - 1, 15, 12, 0, 0).getTime();
+}
+
 export async function readExifDate(filePath: string): Promise<number | null> {
   try {
     const data = await exifr.parse(filePath, {
@@ -105,30 +179,54 @@ export async function readExifDate(filePath: string): Promise<number | null> {
 
 const ONE_DAY_MS = 86_400_000;
 
+/**
+ * Combine the four candidate sources into a single resolved date.
+ * Confidence ordering: EXIF == filename > folder > mtime.
+ *
+ * The "edited file" heuristic still applies: if any older trustworthy
+ * source (filename or folder) is more than 1 day older than EXIF, we
+ * prefer the older one - the assumption is the file was edited or
+ * converted and EXIF got overwritten while the original capture date
+ * survives in the name or in the parent folder. When both filename and
+ * folder are older than EXIF, filename wins because it's more precise.
+ */
 export function resolveDate(
   filenameDate: number | null,
   exifDate: number | null,
+  folderDate: number | null,
   mtime: number
 ): ResolvedDate {
-  if (filenameDate !== null && exifDate !== null) {
-    // If filename is meaningfully older than EXIF, prefer filename
-    // (assumption: file was edited/converted, EXIF overwritten, name preserves original capture date)
-    if (filenameDate < exifDate - ONE_DAY_MS) {
+  if (exifDate !== null) {
+    if (filenameDate !== null && filenameDate < exifDate - ONE_DAY_MS) {
       return { ts: filenameDate, source: 'filename' };
+    }
+    if (folderDate !== null && folderDate < exifDate - ONE_DAY_MS) {
+      return { ts: folderDate, source: 'folder' };
     }
     return { ts: exifDate, source: 'exif' };
   }
-  if (exifDate !== null) return { ts: exifDate, source: 'exif' };
   if (filenameDate !== null) return { ts: filenameDate, source: 'filename' };
+  if (folderDate !== null) return { ts: folderDate, source: 'folder' };
   return { ts: mtime, source: 'mtime' };
 }
 
 export async function resolveImageDate(
   filePath: string,
   filename: string,
-  mtime: number
-): Promise<{ resolved: ResolvedDate; exif: number | null; fromName: number | null }> {
+  mtime: number,
+  folderDate: number | null = null
+): Promise<{
+  resolved: ResolvedDate;
+  exif: number | null;
+  fromName: number | null;
+  fromFolder: number | null;
+}> {
   const fromName = parseFilenameDate(filename);
   const exif = await readExifDate(filePath);
-  return { resolved: resolveDate(fromName, exif, mtime), exif, fromName };
+  return {
+    resolved: resolveDate(fromName, exif, folderDate, mtime),
+    exif,
+    fromName,
+    fromFolder: folderDate
+  };
 }

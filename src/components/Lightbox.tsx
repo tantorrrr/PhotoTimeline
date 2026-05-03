@@ -37,6 +37,7 @@ export function Lightbox({ images, index, onClose, onNav }: Props) {
   const sourceLabel = {
     filename: 'từ tên file',
     exif: 'EXIF',
+    folder: 'từ tên thư mục',
     mtime: 'thời gian file'
   }[row.resolved_source];
 

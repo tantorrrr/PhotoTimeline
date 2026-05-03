@@ -36,8 +36,9 @@ export interface ImageRow {
   mtime: number | null;
   exif_taken_at: number | null;
   filename_taken_at: number | null;
+  folder_taken_at: number | null;
   resolved_taken_at: number;
-  resolved_source: 'filename' | 'exif' | 'mtime';
+  resolved_source: 'filename' | 'exif' | 'folder' | 'mtime';
   width: number | null;
   height: number | null;
   thumb_status: 'pending' | 'ready' | 'error';
@@ -68,6 +69,7 @@ export function initDb(dbPath?: string): Database.Database {
       mtime INTEGER,
       exif_taken_at INTEGER,
       filename_taken_at INTEGER,
+      folder_taken_at INTEGER,
       resolved_taken_at INTEGER NOT NULL,
       resolved_source TEXT NOT NULL,
       width INTEGER,
@@ -78,6 +80,12 @@ export function initDb(dbPath?: string): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_images_resolved ON images(resolved_taken_at DESC);
     CREATE INDEX IF NOT EXISTS idx_images_folder ON images(folder_id);
   `);
+
+  // Migration: older DBs may not have folder_taken_at yet.
+  const cols = db.prepare("PRAGMA table_info(images)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'folder_taken_at')) {
+    db.exec('ALTER TABLE images ADD COLUMN folder_taken_at INTEGER');
+  }
 
   return db;
 }
@@ -152,16 +160,20 @@ export const imageQueries = {
   upsert(row: Omit<ImageRow, 'id'>): number {
     const stmt = getDb().prepare(`
       INSERT INTO images (folder_id, path, filename, ext, size, mtime,
-        exif_taken_at, filename_taken_at, resolved_taken_at, resolved_source,
+        exif_taken_at, filename_taken_at, folder_taken_at,
+        resolved_taken_at, resolved_source,
         width, height, thumb_status)
       VALUES (@folder_id, @path, @filename, @ext, @size, @mtime,
-        @exif_taken_at, @filename_taken_at, @resolved_taken_at, @resolved_source,
+        @exif_taken_at, @filename_taken_at, @folder_taken_at,
+        @resolved_taken_at, @resolved_source,
         @width, @height, @thumb_status)
       ON CONFLICT(path) DO UPDATE SET
+        folder_id = excluded.folder_id,
         mtime = excluded.mtime,
         size = excluded.size,
         exif_taken_at = excluded.exif_taken_at,
         filename_taken_at = excluded.filename_taken_at,
+        folder_taken_at = excluded.folder_taken_at,
         resolved_taken_at = excluded.resolved_taken_at,
         resolved_source = excluded.resolved_source,
         width = excluded.width,

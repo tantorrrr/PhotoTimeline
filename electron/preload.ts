@@ -18,8 +18,9 @@ export type ImageRow = {
   mtime: number | null;
   exif_taken_at: number | null;
   filename_taken_at: number | null;
+  folder_taken_at: number | null;
   resolved_taken_at: number;
-  resolved_source: 'filename' | 'exif' | 'mtime';
+  resolved_source: 'filename' | 'exif' | 'folder' | 'mtime';
   width: number | null;
   height: number | null;
   thumb_status: 'pending' | 'ready' | 'error';

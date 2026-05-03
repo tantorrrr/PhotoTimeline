@@ -3,9 +3,9 @@ import path from 'node:path';
 import os from 'node:os';
 import pLimit from 'p-limit';
 import { folderQueries, imageQueries } from './db';
-import { resolveImageDate } from './metadata';
+import { resolveImageDate, parseFolderDate } from './metadata';
 import { generateThumbnail, thumbPathFor } from './thumbnail';
-import { normalizePath } from './pathUtil';
+import { normalizePath, pathEquals } from './pathUtil';
 
 // Concurrency tuned for typical desktop SSDs. Metadata phase is dominated
 // by EXIF header reads (small IO + JS parse) so it scales to ~2x core
@@ -76,6 +76,35 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
+/**
+ * Walk up from the image's parent directory toward (and including) the
+ * scan root, returning the deepest folder name that parses as a date.
+ * Per-scan cache keeps this cheap when many files share a parent.
+ */
+function makeFolderDateLookup(rootPath: string) {
+  const cache = new Map<string, number | null>();
+  return (filePath: string): number | null => {
+    let dir = path.dirname(filePath);
+    const visited: string[] = [];
+    while (true) {
+      let ts = cache.get(dir);
+      if (ts === undefined) {
+        ts = parseFolderDate(path.basename(dir));
+        cache.set(dir, ts);
+      }
+      if (ts !== null) {
+        for (const v of visited) cache.set(v, ts);
+        return ts;
+      }
+      visited.push(dir);
+      const parent = path.dirname(dir);
+      if (pathEquals(dir, rootPath) || parent === dir) break;
+      dir = parent;
+    }
+    return null;
+  };
+}
+
 export async function scanFolder(
   folderId: number,
   rootPath: string,
@@ -90,6 +119,7 @@ export async function scanFolder(
 
   onProgress?.({ folderId, phase: 'indexing', scanned: 0, total: files.length });
 
+  const folderDateOf = makeFolderDateLookup(rootPath);
   const limitMeta = pLimit(META_CONCURRENCY);
   const limitThumb = pLimit(THUMB_CONCURRENCY);
 
@@ -162,7 +192,8 @@ export async function scanFolder(
             return;
           }
 
-          const { resolved, exif, fromName } = await resolveImageDate(file, filename, mtime);
+          const fromFolder = folderDateOf(file);
+          const { resolved, exif, fromName } = await resolveImageDate(file, filename, mtime, fromFolder);
           const id = imageQueries.upsert({
             folder_id: folderId,
             path: file,
@@ -172,6 +203,7 @@ export async function scanFolder(
             mtime,
             exif_taken_at: exif,
             filename_taken_at: fromName,
+            folder_taken_at: fromFolder,
             resolved_taken_at: resolved.ts,
             resolved_source: resolved.source,
             width: null,
