@@ -27,10 +27,11 @@ function createWindow() {
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
+  // Always open DevTools while we're still debugging
+  mainWindow.webContents.openDevTools({ mode: 'detach' });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -40,8 +41,9 @@ function createWindow() {
 app.whenReady().then(() => {
   initDb();
 
-  const parseId = (url: string, scheme: string): number => {
-    const m = url.match(new RegExp(`^${scheme}://([^/?#]+)`));
+  const parseId = (url: string, _scheme: string): number => {
+    // Tolerate any of: scheme://123, scheme://123/, scheme://t/123, scheme://host/path/123
+    const m = url.match(/(\d+)\/?(?:[?#].*)?$/);
     return m ? parseInt(m[1], 10) : NaN;
   };
 
@@ -54,19 +56,28 @@ app.whenReady().then(() => {
     }
   };
 
-  // thumb://<imageId>  -> serves cached thumbnail jpg
+  // thumb://t/<imageId>  -> serves cached thumbnail jpg
   protocol.handle('thumb', async (req) => {
     const id = parseId(req.url, 'thumb');
+    console.log('[thumb] req', req.url, '-> id', id);
     if (!Number.isFinite(id)) return new Response('bad id', { status: 400 });
     const row = imageQueries.getById(id);
-    if (!row) return new Response('not found', { status: 404 });
-    if (row.thumb_status !== 'ready') return new Response('not ready', { status: 425 });
+    if (!row) {
+      console.warn('[thumb] not found', id);
+      return new Response('not found', { status: 404 });
+    }
+    if (row.thumb_status !== 'ready') {
+      console.warn('[thumb] not ready', id, row.thumb_status);
+      return new Response('not ready', { status: 425 });
+    }
+    const thumbFile = thumbPathFor(row.path);
     try {
-      const data = await fs.readFile(thumbPathFor(row.path));
+      const data = await fs.readFile(thumbFile);
       return new Response(data, {
         headers: { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400' }
       });
     } catch (e) {
+      console.error('[thumb] read failed', thumbFile, e);
       return new Response(String(e), { status: 500 });
     }
   });
