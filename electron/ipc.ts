@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { ipcMain, dialog, BrowserWindow, shell } from 'electron';
 import { folderQueries, imageQueries, AddFolderResult } from './db';
 import { scanFolder, ScanProgress } from './scanner';
 
@@ -82,6 +82,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null) {
   ipcMain.handle('images:count', () => imageQueries.count());
 
   ipcMain.handle('images:get', (_e, id: number) => imageQueries.getById(id));
+
+  ipcMain.handle('shell:showInFolder', (_e, filePath: string) => {
+    shell.showItemInFolder(filePath);
+    return true;
+  });
 }
 
 function triggerScan(

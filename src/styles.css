@@ -229,16 +229,98 @@ body {
   font-size: 16px;
 }
 .lightbox-controls button:hover { background: rgba(255,255,255,0.2); }
+.lightbox-controls button.active {
+  background: rgba(70,130,230,0.55);
+  outline: 1px solid rgba(70,130,230,0.9);
+}
 .lightbox-info {
   position: absolute;
   bottom: 16px;
   left: 16px;
   font-size: 12px;
-  color: #aaa;
+  color: #ccc;
   background: rgba(0,0,0,0.6);
   padding: 6px 10px;
   border-radius: 4px;
   z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+}
+.lightbox-info-name {
+  color: #fff;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 400px;
+}
+.lightbox-info-sep { color: #555; }
+
+.lightbox-debug {
+  position: absolute;
+  top: 64px;
+  right: 16px;
+  width: 360px;
+  background: rgba(20,20,20,0.92);
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 12px;
+  color: #ddd;
+  z-index: 3;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+.lightbox-debug-title {
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #888;
+  margin-bottom: 6px;
+}
+.lightbox-debug-path {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  color: #888;
+  margin-bottom: 8px;
+  word-break: break-all;
+  line-height: 1.4;
+}
+.lightbox-debug table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+.lightbox-debug td {
+  padding: 4px 6px;
+  border-top: 1px solid #2a2a2a;
+}
+.lightbox-debug td.src {
+  color: #888;
+  width: 56px;
+}
+.lightbox-debug td.val {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  color: #bbb;
+}
+.lightbox-debug td.mark {
+  color: #4cae4f;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+.lightbox-debug tr.picked td {
+  background: rgba(76,174,79,0.10);
+  color: #fff;
+}
+.lightbox-debug tr.picked td.val { color: #fff; }
+.lightbox-debug-rule {
+  font-size: 11px;
+  color: #888;
+  line-height: 1.5;
 }
 .lightbox-nav {
   position: absolute;

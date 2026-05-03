@@ -54,6 +54,10 @@ const api = {
     rescan: (id: number): Promise<boolean> => ipcRenderer.invoke('folders:rescan', id)
   },
   pathForDroppedFile: (file: File): string => webUtils.getPathForFile(file),
+  shell: {
+    showInFolder: (filePath: string): Promise<boolean> =>
+      ipcRenderer.invoke('shell:showInFolder', filePath)
+  },
   images: {
     page: (offset: number, limit: number): Promise<ImageRow[]> =>
       ipcRenderer.invoke('images:page', { offset, limit }),
