@@ -11,6 +11,7 @@ export function App() {
   const [images, setImages] = useState<ImageRow[]>([]);
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [dragOver, setDragOver] = useState(false);
 
   const refreshFolders = useCallback(async () => {
     const list = await window.api.folders.list();
@@ -55,7 +56,7 @@ export function App() {
 
   const handleAdd = async () => {
     const r = await window.api.folders.pickAndAdd();
-    if (r) {
+    if (r.length > 0) {
       await refreshFolders();
     }
   };
@@ -67,6 +68,19 @@ export function App() {
 
   const handleRescan = async (id: number) => {
     await window.api.folders.rescan(id);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const paths: string[] = [];
+    for (const item of Array.from(e.dataTransfer.files)) {
+      const p = window.api.pathForDroppedFile(item);
+      if (p) paths.push(p);
+    }
+    if (paths.length === 0) return;
+    const r = await window.api.folders.addPaths(paths);
+    if (r.length > 0) await refreshFolders();
   };
 
   const progressLabel = progress
@@ -82,12 +96,26 @@ export function App() {
     : null;
 
   return (
-    <div className="app">
+    <div
+      className={`app ${dragOver ? 'drag-over' : ''}`}
+      onDragEnter={(e) => {
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragOver(false);
+      }}
+      onDrop={handleDrop}
+    >
       <div className="topbar">
         <h1>Photo Timeline</h1>
         <div className="spacer" />
         {progressLabel && <span className="progress">{progressLabel}</span>}
-        <button onClick={handleAdd}>+ Thêm thư mục</button>
+        <button onClick={handleAdd} title="Thêm 1 thư mục qua hộp thoại. Để thêm nhiều thư mục cùng lúc: kéo-thả các thư mục vào cửa sổ.">+ Thêm thư mục</button>
         <button onClick={() => setPanelOpen((o) => !o)}>
           {panelOpen ? 'Đóng' : `Thư mục (${folders.length})`}
         </button>
@@ -96,6 +124,9 @@ export function App() {
         {images.length === 0 ? (
           <div className="empty">
             <div>Chưa có ảnh nào.</div>
+            <div style={{ fontSize: 12, color: '#777' }}>
+              Bấm nút bên trên hoặc <b>kéo-thả nhiều thư mục</b> vào đây.
+            </div>
             <button onClick={handleAdd}>+ Thêm thư mục đầu tiên</button>
           </div>
         ) : (

@@ -27,13 +27,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null) {
 
   ipcMain.handle('folders:pickAndAdd', async () => {
     const w = getWindow();
-    if (!w) return null;
-    const r = await dialog.showOpenDialog(w, { properties: ['openDirectory'] });
-    if (r.canceled || r.filePaths.length === 0) return null;
-    const folderPath = r.filePaths[0];
-    const id = folderQueries.add(folderPath);
-    triggerScan(id, folderPath, send);
-    return { id, path: folderPath };
+    if (!w) return [];
+    const r = await dialog.showOpenDialog(w, {
+      properties: ['openDirectory', 'multiSelections']
+    });
+    if (r.canceled || r.filePaths.length === 0) return [];
+    const added: { id: number; path: string }[] = [];
+    for (const folderPath of r.filePaths) {
+      const id = folderQueries.add(folderPath);
+      triggerScan(id, folderPath, send);
+      added.push({ id, path: folderPath });
+    }
+    return added;
   });
 
   ipcMain.handle('folders:remove', (_e, id: number) => {
@@ -47,6 +52,23 @@ export function registerIpc(getWindow: () => BrowserWindow | null) {
     if (!f) return false;
     triggerScan(f.id, f.path, send);
     return true;
+  });
+
+  ipcMain.handle('folders:addPaths', async (_e, paths: string[]) => {
+    const fs = await import('node:fs/promises');
+    const added: { id: number; path: string }[] = [];
+    for (const p of paths) {
+      try {
+        const stat = await fs.stat(p);
+        if (!stat.isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      const id = folderQueries.add(p);
+      triggerScan(id, p, send);
+      added.push({ id, path: p });
+    }
+    return added;
   });
 
   ipcMain.handle('images:page', (_e, opts: { offset: number; limit: number }) => {

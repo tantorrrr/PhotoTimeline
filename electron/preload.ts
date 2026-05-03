@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 export type FolderListItem = {
   id: number;
@@ -36,11 +36,14 @@ export type ScanProgress = {
 const api = {
   folders: {
     list: (): Promise<FolderListItem[]> => ipcRenderer.invoke('folders:list'),
-    pickAndAdd: (): Promise<{ id: number; path: string } | null> =>
+    pickAndAdd: (): Promise<{ id: number; path: string }[]> =>
       ipcRenderer.invoke('folders:pickAndAdd'),
+    addPaths: (paths: string[]): Promise<{ id: number; path: string }[]> =>
+      ipcRenderer.invoke('folders:addPaths', paths),
     remove: (id: number): Promise<boolean> => ipcRenderer.invoke('folders:remove', id),
     rescan: (id: number): Promise<boolean> => ipcRenderer.invoke('folders:rescan', id)
   },
+  pathForDroppedFile: (file: File): string => webUtils.getPathForFile(file),
   images: {
     page: (offset: number, limit: number): Promise<ImageRow[]> =>
       ipcRenderer.invoke('images:page', { offset, limit }),
