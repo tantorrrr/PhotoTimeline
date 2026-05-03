@@ -7,6 +7,12 @@ import { extractNefPreview } from './nef';
 
 const THUMB_SIZE = 256;
 
+// Each sharp call internally uses libvips threads. Because we run several
+// thumbnail jobs in parallel via p-limit, capping libvips at 1 thread per
+// op gives the OS scheduler a fair shot and avoids 16+ threads contending
+// for the same cores.
+sharp.concurrency(1);
+
 let cacheDir: string | null = null;
 
 export function thumbDir(): string {
@@ -24,9 +30,25 @@ export async function ensureThumbDir(): Promise<void> {
   await fs.mkdir(thumbDir(), { recursive: true });
 }
 
-export async function generateThumbnail(imagePath: string, ext: string): Promise<void> {
+async function exists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Generate (or reuse) the on-disk thumbnail for an image.
+ * Returns true if the cache hit and no work was done, false if regenerated.
+ */
+export async function generateThumbnail(imagePath: string, ext: string): Promise<boolean> {
   await ensureThumbDir();
   const out = thumbPathFor(imagePath);
+
+  // Cache hit - skip the expensive decode/resize/encode.
+  if (await exists(out)) return true;
 
   let input: string | Buffer = imagePath;
   if (ext === '.nef') {
@@ -36,15 +58,14 @@ export async function generateThumbnail(imagePath: string, ext: string): Promise
   }
 
   await sharp(input, { failOn: 'none' })
-    .rotate() // honor EXIF orientation
+    .rotate()
     .resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover' })
     .jpeg({ quality: 80 })
     .toFile(out);
+  return false;
 }
 
 export async function generateFullPreview(imagePath: string, ext: string): Promise<Buffer> {
-  // For NEF, return embedded JPEG preview as-is (already large enough).
-  // For JPG/PNG, return the file bytes.
   if (ext === '.nef') {
     const buf = await extractNefPreview(imagePath);
     if (!buf) throw new Error('NEF preview not found');
