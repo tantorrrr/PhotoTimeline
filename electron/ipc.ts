@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
-import { folderQueries, imageQueries } from './db';
+import { folderQueries, imageQueries, AddFolderResult } from './db';
 import { scanFolder, ScanProgress } from './scanner';
 
 export type FolderListItem = {
@@ -11,6 +11,18 @@ export type FolderListItem = {
 };
 
 let activeScans = new Set<number>();
+
+function addAndScan(
+  rawPath: string,
+  send: (channel: string, payload: unknown) => void
+): AddFolderResult {
+  const r = folderQueries.add(rawPath);
+  // Only kick off a scan when there's actual new work to do
+  if (r.status === 'added' || r.status === 'subsumed') {
+    triggerScan(r.id, r.path, send);
+  }
+  return r;
+}
 
 export function registerIpc(getWindow: () => BrowserWindow | null) {
   const send = (channel: string, payload: unknown) => {
@@ -25,20 +37,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null) {
     }));
   });
 
-  ipcMain.handle('folders:pickAndAdd', async () => {
+  ipcMain.handle('folders:pickAndAdd', async (): Promise<AddFolderResult[]> => {
     const w = getWindow();
     if (!w) return [];
     const r = await dialog.showOpenDialog(w, {
       properties: ['openDirectory', 'multiSelections']
     });
     if (r.canceled || r.filePaths.length === 0) return [];
-    const added: { id: number; path: string }[] = [];
-    for (const folderPath of r.filePaths) {
-      const id = folderQueries.add(folderPath);
-      triggerScan(id, folderPath, send);
-      added.push({ id, path: folderPath });
-    }
-    return added;
+    return r.filePaths.map((p) => addAndScan(p, send));
   });
 
   ipcMain.handle('folders:remove', (_e, id: number) => {
@@ -54,9 +60,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null) {
     return true;
   });
 
-  ipcMain.handle('folders:addPaths', async (_e, paths: string[]) => {
+  ipcMain.handle('folders:addPaths', async (_e, paths: string[]): Promise<AddFolderResult[]> => {
     const fs = await import('node:fs/promises');
-    const added: { id: number; path: string }[] = [];
+    const out: AddFolderResult[] = [];
     for (const p of paths) {
       try {
         const stat = await fs.stat(p);
@@ -64,11 +70,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null) {
       } catch {
         continue;
       }
-      const id = folderQueries.add(p);
-      triggerScan(id, p, send);
-      added.push({ id, path: p });
+      out.push(addAndScan(p, send));
     }
-    return added;
+    return out;
   });
 
   ipcMain.handle('images:page', (_e, opts: { offset: number; limit: number }) => {

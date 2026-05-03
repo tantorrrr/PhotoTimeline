@@ -33,12 +33,21 @@ export type ScanProgress = {
   message?: string;
 };
 
+export type AddFolderStatus = 'added' | 'duplicate' | 'absorbed' | 'subsumed';
+
+export type AddFolderResult = {
+  id: number;
+  status: AddFolderStatus;
+  path: string;
+  subsumedPaths?: string[];
+};
+
 const api = {
   folders: {
     list: (): Promise<FolderListItem[]> => ipcRenderer.invoke('folders:list'),
-    pickAndAdd: (): Promise<{ id: number; path: string }[]> =>
+    pickAndAdd: (): Promise<AddFolderResult[]> =>
       ipcRenderer.invoke('folders:pickAndAdd'),
-    addPaths: (paths: string[]): Promise<{ id: number; path: string }[]> =>
+    addPaths: (paths: string[]): Promise<AddFolderResult[]> =>
       ipcRenderer.invoke('folders:addPaths', paths),
     remove: (id: number): Promise<boolean> => ipcRenderer.invoke('folders:remove', id),
     rescan: (id: number): Promise<boolean> => ipcRenderer.invoke('folders:rescan', id)

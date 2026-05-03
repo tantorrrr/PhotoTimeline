@@ -154,6 +154,23 @@ body {
   border-bottom: 1px solid #2a2a2a;
 }
 
+.toast {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #2a2a2a;
+  border: 1px solid #444;
+  color: #eee;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  z-index: 150;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+  max-width: 80%;
+  text-align: center;
+}
+
 .empty {
   display: flex;
   align-items: center;

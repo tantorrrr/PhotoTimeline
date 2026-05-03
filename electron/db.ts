@@ -2,6 +2,20 @@ import Database from 'better-sqlite3';
 import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import { normalizePath, pathEquals, isAncestor } from './pathUtil';
+
+export type AddFolderStatus =
+  | 'added'      // brand new
+  | 'duplicate'  // identical path already imported
+  | 'absorbed'   // a parent folder is already imported
+  | 'subsumed';  // existing descendants were removed and replaced by this parent
+
+export interface AddFolderResult {
+  id: number;
+  status: AddFolderStatus;
+  path: string;
+  subsumedPaths?: string[];
+}
 
 let db: Database.Database;
 
@@ -78,16 +92,48 @@ export const folderQueries = {
   list(): Folder[] {
     return getDb().prepare('SELECT * FROM folders ORDER BY added_at DESC').all() as Folder[];
   },
-  add(p: string): number {
-    const stmt = getDb().prepare(
-      'INSERT INTO folders (path, added_at) VALUES (?, ?) ON CONFLICT(path) DO NOTHING'
-    );
-    const info = stmt.run(p, Date.now());
-    if (info.changes === 0) {
-      const existing = getDb().prepare('SELECT id FROM folders WHERE path = ?').get(p) as { id: number };
-      return existing.id;
+  add(rawPath: string): AddFolderResult {
+    const normalized = normalizePath(rawPath);
+    const all = folderQueries.list();
+
+    // 1. Identical (after normalization, case-insensitive on Windows)
+    for (const f of all) {
+      if (pathEquals(f.path, normalized)) {
+        return { id: f.id, status: 'duplicate', path: f.path };
+      }
     }
-    return info.lastInsertRowid as number;
+
+    // 2. A parent is already imported - the new folder is already covered
+    for (const f of all) {
+      if (isAncestor(f.path, normalized)) {
+        return { id: f.id, status: 'absorbed', path: f.path };
+      }
+    }
+
+    // 3. New folder is an ancestor of one or more existing folders -
+    //    remove descendants (cascade deletes their images) and let the
+    //    new parent re-index everything under one folder_id.
+    const descendants = all.filter((f) => isAncestor(normalized, f.path));
+    const subsumedPaths: string[] = [];
+    if (descendants.length > 0) {
+      const tx = getDb().transaction(() => {
+        for (const d of descendants) {
+          getDb().prepare('DELETE FROM folders WHERE id = ?').run(d.id);
+          subsumedPaths.push(d.path);
+        }
+      });
+      tx();
+    }
+
+    const info = getDb()
+      .prepare('INSERT INTO folders (path, added_at) VALUES (?, ?)')
+      .run(normalized, Date.now());
+    return {
+      id: info.lastInsertRowid as number,
+      status: descendants.length > 0 ? 'subsumed' : 'added',
+      path: normalized,
+      subsumedPaths: subsumedPaths.length > 0 ? subsumedPaths : undefined
+    };
   },
   remove(id: number): void {
     getDb().prepare('DELETE FROM folders WHERE id = ?').run(id);

@@ -2,7 +2,24 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { TimelineGrid } from './components/TimelineGrid';
 import { FolderManager } from './components/FolderManager';
 import { Lightbox } from './components/Lightbox';
-import type { ImageRow, ScanProgress, FolderListItem } from '../electron/preload';
+import type { ImageRow, ScanProgress, FolderListItem, AddFolderResult } from '../electron/preload';
+
+function summarizeAdd(results: AddFolderResult[]): string | null {
+  if (results.length === 0) return null;
+  const parts: string[] = [];
+  const added = results.filter((r) => r.status === 'added');
+  const dup = results.filter((r) => r.status === 'duplicate');
+  const absorbed = results.filter((r) => r.status === 'absorbed');
+  const subsumed = results.filter((r) => r.status === 'subsumed');
+  if (added.length) parts.push(`${added.length} thư mục đã thêm`);
+  if (subsumed.length) {
+    const total = subsumed.reduce((n, r) => n + (r.subsumedPaths?.length ?? 0), 0);
+    parts.push(`${subsumed.length} thư mục cha thay thế ${total} thư mục con đã import`);
+  }
+  if (dup.length) parts.push(`${dup.length} đã tồn tại (bỏ qua)`);
+  if (absorbed.length) parts.push(`${absorbed.length} nằm trong thư mục đã import (bỏ qua)`);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
 
 export function App() {
   const [folders, setFolders] = useState<FolderListItem[]>([]);
@@ -12,6 +29,12 @@ export function App() {
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [dragOver, setDragOver] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 4500);
+  }, []);
 
   const refreshFolders = useCallback(async () => {
     const list = await window.api.folders.list();
@@ -56,9 +79,9 @@ export function App() {
 
   const handleAdd = async () => {
     const r = await window.api.folders.pickAndAdd();
-    if (r.length > 0) {
-      await refreshFolders();
-    }
+    if (r.length > 0) await refreshFolders();
+    const msg = summarizeAdd(r);
+    if (msg) showToast(msg);
   };
 
   const handleRemove = async (id: number) => {
@@ -81,6 +104,8 @@ export function App() {
     if (paths.length === 0) return;
     const r = await window.api.folders.addPaths(paths);
     if (r.length > 0) await refreshFolders();
+    const msg = summarizeAdd(r);
+    if (msg) showToast(msg);
   };
 
   const progressLabel = progress
@@ -148,6 +173,8 @@ export function App() {
             onNav={(i) => setLightboxIdx(i)}
           />
         )}
+
+        {toast && <div className="toast">{toast}</div>}
       </div>
     </div>
   );

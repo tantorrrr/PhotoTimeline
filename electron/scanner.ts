@@ -4,6 +4,7 @@ import pLimit from 'p-limit';
 import { folderQueries, imageQueries, ImageRow } from './db';
 import { resolveImageDate } from './metadata';
 import { generateThumbnail } from './thumbnail';
+import { normalizePath } from './pathUtil';
 
 const SUPPORTED_EXT = new Set(['.jpg', '.jpeg', '.png', '.nef']);
 
@@ -17,7 +18,18 @@ export type ScanProgress = {
 
 export type ProgressFn = (p: ScanProgress) => void;
 
-async function* walk(dir: string): AsyncGenerator<string> {
+async function* walk(dir: string, visited: Set<string> = new Set()): AsyncGenerator<string> {
+  // Guard against symlink/junction loops by tracking realpath.
+  let real: string;
+  try {
+    real = await fs.realpath(dir);
+  } catch {
+    return;
+  }
+  const key = process.platform === 'win32' ? real.toLowerCase() : real;
+  if (visited.has(key)) return;
+  visited.add(key);
+
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
@@ -26,11 +38,23 @@ async function* walk(dir: string): AsyncGenerator<string> {
   }
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      yield* walk(full);
+    if (entry.isDirectory() || entry.isSymbolicLink()) {
+      // For symlinks, isDirectory() may be false; resolve and check.
+      try {
+        const st = await fs.stat(full);
+        if (st.isDirectory()) {
+          yield* walk(full, visited);
+          continue;
+        }
+        if (!st.isFile()) continue;
+        const ext = path.extname(entry.name).toLowerCase();
+        if (SUPPORTED_EXT.has(ext)) yield normalizePath(full);
+      } catch {
+        /* skip unreadable entry */
+      }
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).toLowerCase();
-      if (SUPPORTED_EXT.has(ext)) yield full;
+      if (SUPPORTED_EXT.has(ext)) yield normalizePath(full);
     }
   }
 }
