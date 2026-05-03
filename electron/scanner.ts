@@ -60,7 +60,7 @@ export async function scanFolder(
           const stat = await fs.stat(file);
           const filename = path.basename(file);
           const ext = path.extname(file).toLowerCase();
-          const mtime = stat.mtimeMs | 0;
+          const mtime = Math.floor(stat.mtimeMs);
 
           const existing = imageQueries.getByPath(file);
           if (existing && existing.mtime === mtime) {

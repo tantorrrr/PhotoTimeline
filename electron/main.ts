@@ -1,6 +1,6 @@
-import { app, BrowserWindow, protocol, net } from 'electron';
+import { app, BrowserWindow, protocol } from 'electron';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import fs from 'node:fs/promises';
 import { initDb, imageQueries } from './db';
 import { registerIpc } from './ipc';
 import { thumbPathFor, generateFullPreview } from './thumbnail';
@@ -40,20 +40,40 @@ function createWindow() {
 app.whenReady().then(() => {
   initDb();
 
+  const parseId = (url: string, scheme: string): number => {
+    const m = url.match(new RegExp(`^${scheme}://([^/?#]+)`));
+    return m ? parseInt(m[1], 10) : NaN;
+  };
+
+  const mimeFromExt = (ext: string): string => {
+    switch (ext) {
+      case '.png': return 'image/png';
+      case '.gif': return 'image/gif';
+      case '.webp': return 'image/webp';
+      default: return 'image/jpeg';
+    }
+  };
+
   // thumb://<imageId>  -> serves cached thumbnail jpg
   protocol.handle('thumb', async (req) => {
-    const id = parseInt(req.url.replace(/^thumb:\/\//, '').replace(/\/$/, ''), 10);
+    const id = parseId(req.url, 'thumb');
     if (!Number.isFinite(id)) return new Response('bad id', { status: 400 });
     const row = imageQueries.getById(id);
     if (!row) return new Response('not found', { status: 404 });
     if (row.thumb_status !== 'ready') return new Response('not ready', { status: 425 });
-    const url = pathToFileURL(thumbPathFor(row.path)).toString();
-    return net.fetch(url);
+    try {
+      const data = await fs.readFile(thumbPathFor(row.path));
+      return new Response(data, {
+        headers: { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400' }
+      });
+    } catch (e) {
+      return new Response(String(e), { status: 500 });
+    }
   });
 
   // photo://<imageId>  -> serves full-resolution image (or NEF embedded preview) bytes
   protocol.handle('photo', async (req) => {
-    const id = parseInt(req.url.replace(/^photo:\/\//, '').replace(/\/$/, ''), 10);
+    const id = parseId(req.url, 'photo');
     if (!Number.isFinite(id)) return new Response('bad id', { status: 400 });
     const row = imageQueries.getById(id);
     if (!row) return new Response('not found', { status: 404 });
@@ -62,8 +82,8 @@ app.whenReady().then(() => {
         const buf = await generateFullPreview(row.path, row.ext);
         return new Response(buf, { headers: { 'content-type': 'image/jpeg' } });
       }
-      const url = pathToFileURL(row.path).toString();
-      return net.fetch(url);
+      const data = await fs.readFile(row.path);
+      return new Response(data, { headers: { 'content-type': mimeFromExt(row.ext) } });
     } catch (e) {
       return new Response(String(e), { status: 500 });
     }
