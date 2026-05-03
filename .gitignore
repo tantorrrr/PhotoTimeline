@@ -5,3 +5,4 @@ dist
 .vite
 manual_download
 package-lock.json
+.claude
