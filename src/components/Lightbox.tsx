@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useZoomPan } from '../hooks/useZoomPan';
 import type { ImageRow, Album, ResolvedSource } from '../../electron/preload';
-import { isVideoExt } from '../../electron/media';
+import { isVideoExt, photoUrl } from '../../electron/media';
 
 interface Props {
   images: ImageRow[];
@@ -154,13 +154,13 @@ export function Lightbox({
       {isVideo ? (
         <div className="lightbox-img-wrap">
           {/* key forces a fresh element (and reload) when navigating between videos */}
-          <video key={row.id} className="lightbox-video" src={`photo://${row.id}`} controls autoPlay />
+          <video key={row.id} className="lightbox-video" src={photoUrl(row.id)} controls autoPlay />
         </div>
       ) : (
         <div className={`lightbox-img-wrap ${isDragging ? 'dragging' : ''}`} ref={containerRef}>
           <img
             className="lightbox-img"
-            src={`photo://${row.id}`}
+            src={photoUrl(row.id)}
             alt={row.filename}
             draggable={false}
             style={{

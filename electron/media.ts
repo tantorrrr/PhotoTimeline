@@ -30,6 +30,17 @@ export function imageMime(ext: string): string {
   }
 }
 
+/**
+ * URLs for the custom thumb:// and photo:// protocols. The id MUST live in the
+ * PATH, never the host. Both schemes are registered `standard: true`, and
+ * Chromium canonicalises a bare numeric host into an IPv4 address
+ * (e.g. thumb://4347 -> thumb://0.0.16.251), which silently collapses every
+ * id >= 256 onto id % 256 - showing the wrong, repeated image everywhere.
+ * A non-numeric host segment ("t"/"p") sidesteps that canonicalisation.
+ */
+export const thumbUrl = (id: number): string => `thumb://t/${id}`;
+export const photoUrl = (id: number): string => `photo://p/${id}`;
+
 export function videoMime(ext: string): string {
   switch (ext.toLowerCase()) {
     case '.webm':

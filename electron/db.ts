@@ -112,7 +112,6 @@ export function initDb(dbPath?: string): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_images_resolved ON images(resolved_taken_at DESC);
     CREATE INDEX IF NOT EXISTS idx_images_folder ON images(folder_id);
-    CREATE INDEX IF NOT EXISTS idx_images_phash ON images(phash);
     CREATE INDEX IF NOT EXISTS idx_album_items_image ON album_items(image_id);
   `);
 
@@ -124,6 +123,10 @@ export function initDb(dbPath?: string): Database.Database {
   if (!has('user_taken_at')) db.exec('ALTER TABLE images ADD COLUMN user_taken_at INTEGER');
   if (!has('favorite')) db.exec('ALTER TABLE images ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0');
   if (!has('phash')) db.exec('ALTER TABLE images ADD COLUMN phash TEXT');
+
+  // Index on phash must come after the migration above: on an existing DB the
+  // CREATE TABLE is a no-op so the column only exists once the ALTER has run.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_images_phash ON images(phash);');
 
   return db;
 }

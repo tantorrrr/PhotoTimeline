@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import type { ImageRow } from '../../electron/preload';
-import { isVideoExt } from '../../electron/media';
+import { isVideoExt, thumbUrl } from '../../electron/media';
 
 interface Props {
   images: ImageRow[];
@@ -44,7 +44,7 @@ export function OnThisDay({ images, onOpen }: Props) {
                   <span className="play-icon">▶</span>
                 </div>
               ) : row.thumb_status === 'ready' ? (
-                <img src={`thumb://${row.id}`} loading="lazy" alt={row.filename} />
+                <img src={thumbUrl(row.id)} loading="lazy" alt={row.filename} />
               ) : (
                 <div className="thumb-placeholder">…</div>
               )}
