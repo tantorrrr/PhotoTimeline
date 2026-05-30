@@ -1,8 +1,19 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { TimelineGrid } from './components/TimelineGrid';
 import { FolderManager } from './components/FolderManager';
 import { Lightbox } from './components/Lightbox';
-import type { ImageRow, ScanProgress, FolderListItem, AddFolderResult } from '../electron/preload';
+import { FilterBar, FilterState } from './components/FilterBar';
+import { SelectionBar } from './components/SelectionBar';
+import { OnThisDay } from './components/OnThisDay';
+import { DuplicatesView } from './components/DuplicatesView';
+import type {
+  ImageRow,
+  ScanProgress,
+  FolderListItem,
+  AddFolderResult,
+  Album
+} from '../electron/preload';
+import { isVideoExt } from '../electron/media';
 
 function summarizeAdd(results: AddFolderResult[]): string | null {
   if (results.length === 0) return null;
@@ -21,15 +32,22 @@ function summarizeAdd(results: AddFolderResult[]): string | null {
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
+const EMPTY_FILTER: FilterState = { text: '', type: 'all', favOnly: false, albumId: null };
+
 export function App() {
   const [folders, setFolders] = useState<FolderListItem[]>([]);
+  const [albums, setAlbums] = useState<Album[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [images, setImages] = useState<ImageRow[]>([]);
-  const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
+  const [lightbox, setLightbox] = useState<{ ids: number[]; index: number } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
+  const [albumMemberIds, setAlbumMemberIds] = useState<number[] | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [dupOpen, setDupOpen] = useState(false);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -37,8 +55,11 @@ export function App() {
   }, []);
 
   const refreshFolders = useCallback(async () => {
-    const list = await window.api.folders.list();
-    setFolders(list);
+    setFolders(await window.api.folders.list());
+  }, []);
+
+  const refreshAlbums = useCallback(async () => {
+    setAlbums(await window.api.albums.list());
   }, []);
 
   const refreshImages = useCallback(async () => {
@@ -60,8 +81,24 @@ export function App() {
 
   useEffect(() => {
     refreshFolders();
+    refreshAlbums();
     refreshImages();
-  }, [refreshFolders, refreshImages, reloadKey]);
+  }, [refreshFolders, refreshAlbums, refreshImages, reloadKey]);
+
+  // Fetch album membership whenever the active album filter changes.
+  useEffect(() => {
+    if (filter.albumId === null) {
+      setAlbumMemberIds(null);
+      return;
+    }
+    let cancelled = false;
+    window.api.albums.imageIds(filter.albumId).then((ids) => {
+      if (!cancelled) setAlbumMemberIds(ids);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [filter.albumId, reloadKey]);
 
   useEffect(() => {
     const off = window.api.onScanProgress((p) => {
@@ -74,23 +111,70 @@ export function App() {
         setReloadKey((k) => k + 1);
       }
     });
-    return off;
+    return () => {
+      off();
+    };
   }, []);
 
+  const byId = useMemo(() => new Map(images.map((r) => [r.id, r])), [images]);
+
+  const filtered = useMemo(() => {
+    const q = filter.text.trim().toLowerCase();
+    const albumSet =
+      filter.albumId !== null && albumMemberIds ? new Set(albumMemberIds) : null;
+    return images.filter((r) => {
+      if (q && !r.filename.toLowerCase().includes(q) && !r.path.toLowerCase().includes(q))
+        return false;
+      if (filter.favOnly && !r.favorite) return false;
+      if (filter.type === 'video' && !isVideoExt(r.ext)) return false;
+      if (filter.type === 'raw' && r.ext !== '.nef') return false;
+      if (filter.type === 'photo' && isVideoExt(r.ext)) return false;
+      if (albumSet && !albumSet.has(r.id)) return false;
+      return true;
+    });
+  }, [images, filter, albumMemberIds]);
+
+  const patchImage = useCallback((id: number, partial: Partial<ImageRow>) => {
+    setImages((prev) => prev.map((r) => (r.id === id ? { ...r, ...partial } : r)));
+  }, []);
+
+  // --- lightbox helpers ---
+  const openLightbox = useCallback((list: ImageRow[], index: number) => {
+    setLightbox({ ids: list.map((r) => r.id), index });
+  }, []);
+  const lightboxImages = useMemo(
+    () => (lightbox ? (lightbox.ids.map((id) => byId.get(id)).filter(Boolean) as ImageRow[]) : []),
+    [lightbox, byId]
+  );
+
+  // --- selection ---
+  const toggleSelect = useCallback((id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
+
+  // --- folder handlers ---
   const handleAdd = async () => {
     const r = await window.api.folders.pickAndAdd();
     if (r.length > 0) await refreshFolders();
     const msg = summarizeAdd(r);
     if (msg) showToast(msg);
   };
-
   const handleRemove = async (id: number) => {
     await window.api.folders.remove(id);
     setReloadKey((k) => k + 1);
   };
-
   const handleRescan = async (id: number) => {
     await window.api.folders.rescan(id);
+  };
+  const handleRemoveAlbum = async (id: number) => {
+    await window.api.albums.remove(id);
+    if (filter.albumId === id) setFilter({ ...filter, albumId: null });
+    await refreshAlbums();
   };
 
   const handleDrop = async (e: React.DragEvent) => {
@@ -107,6 +191,74 @@ export function App() {
     const msg = summarizeAdd(r);
     if (msg) showToast(msg);
   };
+
+  // --- per-image actions ---
+  const handleToggleFavorite = useCallback(
+    async (row: ImageRow) => {
+      const fav = !row.favorite;
+      await window.api.images.setFavorite(row.id, fav);
+      patchImage(row.id, { favorite: fav ? 1 : 0 });
+    },
+    [patchImage]
+  );
+  const handleSetDate = useCallback(
+    async (row: ImageRow, ts: number | null) => {
+      const updated = await window.api.images.setDate(row.id, ts);
+      if (updated) patchImage(row.id, updated);
+    },
+    [patchImage]
+  );
+  const handleAddToAlbum = useCallback(
+    async (row: ImageRow, albumId: number) => {
+      await window.api.albums.addImages(albumId, [row.id]);
+      await refreshAlbums();
+      showToast('Đã thêm vào album');
+    },
+    [refreshAlbums, showToast]
+  );
+
+  // --- batch actions ---
+  const selectedIds = useMemo(() => Array.from(selected), [selected]);
+  const handleBatchFavorite = useCallback(
+    async (fav: boolean) => {
+      await Promise.all(selectedIds.map((id) => window.api.images.setFavorite(id, fav)));
+      selectedIds.forEach((id) => patchImage(id, { favorite: fav ? 1 : 0 }));
+      showToast(`${selectedIds.length} ảnh ${fav ? 'đã yêu thích' : 'bỏ yêu thích'}`);
+    },
+    [selectedIds, patchImage, showToast]
+  );
+  const handleBatchExport = useCallback(async () => {
+    const r = await window.api.images.exportTo(selectedIds);
+    if (r.dest) showToast(`Đã sao chép ${r.copied} tệp`);
+  }, [selectedIds, showToast]);
+  const handleBatchTrash = useCallback(async () => {
+    const ok = window.confirm(
+      `Chuyển ${selectedIds.length} tệp vào thùng rác? (có thể khôi phục từ Recycle Bin)`
+    );
+    if (!ok) return;
+    const r = await window.api.images.trash(selectedIds);
+    clearSelection();
+    setLightbox(null);
+    setReloadKey((k) => k + 1);
+    showToast(`Đã chuyển ${r.trashed} tệp vào thùng rác`);
+  }, [selectedIds, clearSelection, showToast]);
+  const handleAddSelectedToAlbum = useCallback(
+    async (albumId: number) => {
+      await window.api.albums.addImages(albumId, selectedIds);
+      await refreshAlbums();
+      showToast(`Đã thêm ${selectedIds.length} ảnh vào album`);
+    },
+    [selectedIds, refreshAlbums, showToast]
+  );
+  const handleCreateAlbumAndAdd = useCallback(
+    async (name: string) => {
+      const a = await window.api.albums.create(name);
+      await window.api.albums.addImages(a.id, selectedIds);
+      await refreshAlbums();
+      showToast(`Đã tạo album "${name}" với ${selectedIds.length} ảnh`);
+    },
+    [selectedIds, refreshAlbums, showToast]
+  );
 
   const progressLabel = progress
     ? progress.phase === 'walking'
@@ -145,6 +297,18 @@ export function App() {
           {panelOpen ? 'Đóng' : `Thư mục (${folders.length})`}
         </button>
       </div>
+
+      {images.length > 0 && (
+        <FilterBar
+          filter={filter}
+          setFilter={setFilter}
+          albums={albums}
+          shown={filtered.length}
+          total={images.length}
+          onOpenDuplicates={() => setDupOpen(true)}
+        />
+      )}
+
       <div className="main">
         {images.length === 0 ? (
           <div className="empty">
@@ -155,22 +319,64 @@ export function App() {
             <button onClick={handleAdd}>+ Thêm thư mục đầu tiên</button>
           </div>
         ) : (
-          <TimelineGrid images={images} onOpen={(idx) => setLightboxIdx(idx)} />
+          <>
+            {filter.albumId === null && !filter.favOnly && (
+              <OnThisDay images={images} onOpen={openLightbox} />
+            )}
+            {filtered.length === 0 ? (
+              <div className="empty">Không có mục nào khớp bộ lọc.</div>
+            ) : (
+              <TimelineGrid
+                images={filtered}
+                onOpen={(idx) => openLightbox(filtered, idx)}
+                selected={selected}
+                onToggleSelect={toggleSelect}
+                selectionMode={selected.size > 0}
+              />
+            )}
+          </>
         )}
 
         <FolderManager
           open={panelOpen}
           folders={folders}
+          albums={albums}
           onRemove={handleRemove}
           onRescan={handleRescan}
+          onRemoveAlbum={handleRemoveAlbum}
         />
 
-        {lightboxIdx !== null && (
+        {lightbox && lightboxImages.length > 0 && (
           <Lightbox
-            images={images}
-            index={lightboxIdx}
-            onClose={() => setLightboxIdx(null)}
-            onNav={(i) => setLightboxIdx(i)}
+            images={lightboxImages}
+            index={Math.min(lightbox.index, lightboxImages.length - 1)}
+            albums={albums}
+            onClose={() => setLightbox(null)}
+            onNav={(i) => setLightbox((lb) => (lb ? { ...lb, index: i } : lb))}
+            onToggleFavorite={handleToggleFavorite}
+            onSetDate={handleSetDate}
+            onAddToAlbum={handleAddToAlbum}
+          />
+        )}
+
+        {selected.size > 0 && (
+          <SelectionBar
+            count={selected.size}
+            albums={albums}
+            onClear={clearSelection}
+            onFavorite={handleBatchFavorite}
+            onExport={handleBatchExport}
+            onTrash={handleBatchTrash}
+            onAddToAlbum={handleAddSelectedToAlbum}
+            onCreateAlbumAndAdd={handleCreateAlbumAndAdd}
+          />
+        )}
+
+        {dupOpen && (
+          <DuplicatesView
+            onClose={() => setDupOpen(false)}
+            onChanged={() => setReloadKey((k) => k + 1)}
+            onOpen={openLightbox}
           />
         )}
 
