@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import type { DuplicateGroup, ImageRow } from '../../electron/preload';
-import { isVideoExt } from '../../electron/media';
+import { isVideoExt, thumbUrl } from '../../electron/media';
 
 interface Props {
   onClose: () => void;
@@ -102,7 +102,7 @@ export function DuplicatesView({ onClose, onChanged, onOpen }: Props) {
                         {isVideoExt(img.ext) ? (
                           <div className="thumb-video small"><span className="play-icon">▶</span></div>
                         ) : img.thumb_status === 'ready' ? (
-                          <img src={`thumb://${img.id}`} loading="lazy" alt={img.filename} />
+                          <img src={thumbUrl(img.id)} loading="lazy" alt={img.filename} />
                         ) : (
                           <div className="thumb-placeholder">…</div>
                         )}

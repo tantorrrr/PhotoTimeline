@@ -59,7 +59,10 @@ export async function generateThumbnail(imagePath: string, ext: string): Promise
 
   await sharp(input, { failOn: 'none' })
     .rotate()
-    .resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover' })
+    // 'inside' preserves the full frame (no crop) so the grid tile matches
+    // the image you see when opening it; the renderer letterboxes the
+    // non-square result into a square cell via object-fit: contain.
+    .resize(THUMB_SIZE, THUMB_SIZE, { fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 80 })
     .toFile(out);
   return false;
