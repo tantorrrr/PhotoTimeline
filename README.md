@@ -10,7 +10,7 @@ Import any folders you want, keep your originals exactly where they are, and bro
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=000)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/tests-31%20passing-3fb950)](#)
+[![Tests](https://img.shields.io/badge/tests-76%20passing-3fb950)](#)
 
 </div>
 
@@ -24,6 +24,12 @@ Import any folders you want, keep your originals exactly where they are, and bro
 - **NEF / RAW support.** Nikon `.nef` files render via their embedded JPEG preview, no debayer needed.
 - **Drop multiple folders at once.** Native Windows folder dialog only allows one; drag-drop lets you import many in one go.
 - **Lightroom-style viewer.** Wheel zoom-at-cursor (1x to 8x), drag to pan, arrow keys to navigate, Esc to close.
+- **Video too.** MP4 / MOV / M4V / WebM show up on the timeline and play inline (Range-streamed, so seeking works).
+- **Search, filter & date scrubber.** Filter by filename, media type, favorites, or album; grab the right-edge scrubber to jump to any year/month.
+- **Favorites & albums.** Heart a photo (`F`), multi-select to batch favorite / export / trash, and group anything into albums.
+- **Find duplicates.** A perceptual-hash finder groups the same shot copied across your scattered folders, keeps the largest, and sends the rest to the Recycle Bin (recoverable).
+- **Fix the date yourself.** Override any capture date from the viewer; the override wins over every automatic source and survives rescans.
+- **On this day.** A strip resurfaces photos taken on today's date in past years.
 
 ## Stack
 
@@ -50,7 +56,7 @@ Other scripts:
 ```bash
 npm run build        # production bundle
 npm start            # run the built app
-npm test             # vitest (31 tests)
+npm test             # vitest (76 tests)
 npm run package      # NSIS installer for Windows
 ```
 
@@ -76,12 +82,18 @@ The two pools run as a pipeline: each row is committed to SQLite the moment EXIF
 For each image:
 
 ```
+priority: user override > folder name > EXIF > filename > file mtime
+
 filename_date  exif_date    -> picked
    set           set        -> EXIF, unless filename is more than 1 day older
    set           none       -> filename
    none          set        -> EXIF
    none          none       -> file mtime
 ```
+
+A folder name that parses as a date (e.g. `tet 2019/`) wins over the file's own
+EXIF/filename, and a manual override set from the viewer beats everything. Both
+are preserved across rescans.
 
 Patterns recognised in filenames: `IMG_YYYYMMDD_HHMMSS`, `PXL_YYYYMMDD_HHMMSS`, `IMG-YYYYMMDD-WANNNN`, `Screenshot_YYYY-MM-DD-HH-MM-SS`, `YYYYMMDD_HHMMSS`, ISO `YYYY-MM-DD_HH-MM-SS`, and a generic 8-digit fallback validated against `1990 <= year <= currentYear+1`.
 

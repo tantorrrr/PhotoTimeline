@@ -4,8 +4,9 @@ import os from 'node:os';
 import pLimit from 'p-limit';
 import { folderQueries, imageQueries } from './db';
 import { resolveImageDate, parseFolderDate } from './metadata';
-import { generateThumbnail, thumbPathFor } from './thumbnail';
+import { generateThumbnail, thumbPathFor, perceptualHash } from './thumbnail';
 import { normalizePath, pathEquals } from './pathUtil';
+import { SUPPORTED_EXT, isVideoExt } from './media';
 
 // Concurrency tuned for typical desktop SSDs. Metadata phase is dominated
 // by EXIF header reads (small IO + JS parse) so it scales to ~2x core
@@ -13,8 +14,6 @@ import { normalizePath, pathEquals } from './pathUtil';
 // the cache file, so saturating CPU cores is enough.
 const META_CONCURRENCY = Math.max(8, Math.min(32, os.cpus().length * 2));
 const THUMB_CONCURRENCY = Math.max(2, Math.min(8, os.cpus().length));
-
-const SUPPORTED_EXT = new Set(['.jpg', '.jpeg', '.png', '.nef']);
 
 export type ScanProgress = {
   folderId: number;
@@ -175,6 +174,7 @@ export async function scanFolder(
           const ext = path.extname(file).toLowerCase();
           const mtime = Math.floor(stat.mtimeMs);
 
+          const isVideo = isVideoExt(ext);
           const existing = imageQueries.getByPath(file);
 
           // Hot path: row exists, mtime unchanged. Skip the EXIF read and
@@ -182,6 +182,16 @@ export async function scanFolder(
           // done; otherwise (status=pending, error, or missing file)
           // requeue so the new extraction code gets a chance to retry.
           if (existing && existing.mtime === mtime) {
+            // Videos carry no on-disk thumbnail (the renderer shows a poster
+            // tile + native player), so they are always "done" on the hot path.
+            if (isVideo) return;
+            // One-time backfill: DBs imported before perceptual hashing have
+            // no phash. Compute it lazily so the duplicate finder works
+            // without forcing a full re-index.
+            if (!existing.phash) {
+              const ph = await perceptualHash(file, ext);
+              if (ph) imageQueries.setPhash(existing.id, ph);
+            }
             const cached =
               existing.thumb_status === 'ready' &&
               (await fileExists(thumbPathFor(file)));
@@ -194,7 +204,17 @@ export async function scanFolder(
           }
 
           const fromFolder = folderDateOf(file);
-          const { resolved, exif, fromName } = await resolveImageDate(file, filename, mtime, fromFolder);
+          // Preserve any manual date override across rescans by feeding it
+          // back into the resolver.
+          const userDate = existing?.user_taken_at ?? null;
+          const { resolved, exif, fromName } = await resolveImageDate(
+            file,
+            filename,
+            mtime,
+            fromFolder,
+            userDate
+          );
+          const phash = isVideo ? null : await perceptualHash(file, ext);
           const id = imageQueries.upsert({
             folder_id: folderId,
             path: file,
@@ -205,14 +225,18 @@ export async function scanFolder(
             exif_taken_at: exif,
             filename_taken_at: fromName,
             folder_taken_at: fromFolder,
+            user_taken_at: userDate,
             resolved_taken_at: resolved.ts,
             resolved_source: resolved.source,
             width: null,
             height: null,
-            thumb_status: 'pending'
+            thumb_status: isVideo ? 'ready' : 'pending',
+            favorite: existing?.favorite ?? 0,
+            phash
           });
           added++;
-          queueThumb(id, file, ext);
+          // Videos need no thumbnail job; their tile renders without a cache file.
+          if (!isVideo) queueThumb(id, file, ext);
         } catch (err) {
           console.error('index error', file, err);
         } finally {

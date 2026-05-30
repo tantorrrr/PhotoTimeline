@@ -8,6 +8,8 @@ export type FolderListItem = {
   image_count: number;
 };
 
+export type ResolvedSource = 'user' | 'filename' | 'exif' | 'folder' | 'mtime';
+
 export type ImageRow = {
   id: number;
   folder_id: number;
@@ -19,11 +21,26 @@ export type ImageRow = {
   exif_taken_at: number | null;
   filename_taken_at: number | null;
   folder_taken_at: number | null;
+  user_taken_at: number | null;
   resolved_taken_at: number;
-  resolved_source: 'filename' | 'exif' | 'folder' | 'mtime';
+  resolved_source: ResolvedSource;
   width: number | null;
   height: number | null;
   thumb_status: 'pending' | 'ready' | 'error';
+  favorite: number;
+  phash: string | null;
+};
+
+export type Album = {
+  id: number;
+  name: string;
+  created_at: number;
+  image_count?: number;
+};
+
+export type DuplicateGroup = {
+  phash: string;
+  images: ImageRow[];
 };
 
 export type ScanProgress = {
@@ -62,7 +79,27 @@ const api = {
     page: (offset: number, limit: number): Promise<ImageRow[]> =>
       ipcRenderer.invoke('images:page', { offset, limit }),
     count: (): Promise<number> => ipcRenderer.invoke('images:count'),
-    get: (id: number): Promise<ImageRow | undefined> => ipcRenderer.invoke('images:get', id)
+    get: (id: number): Promise<ImageRow | undefined> => ipcRenderer.invoke('images:get', id),
+    setFavorite: (id: number, favorite: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('images:setFavorite', id, favorite),
+    setDate: (id: number, ts: number | null): Promise<ImageRow | null> =>
+      ipcRenderer.invoke('images:setDate', id, ts),
+    findDuplicates: (): Promise<DuplicateGroup[]> => ipcRenderer.invoke('images:findDuplicates'),
+    trash: (ids: number[]): Promise<{ trashed: number; failed: number[] }> =>
+      ipcRenderer.invoke('images:trash', ids),
+    exportTo: (ids: number[]): Promise<{ copied: number; dest: string | null }> =>
+      ipcRenderer.invoke('images:exportTo', ids)
+  },
+  albums: {
+    list: (): Promise<Album[]> => ipcRenderer.invoke('albums:list'),
+    create: (name: string): Promise<Album> => ipcRenderer.invoke('albums:create', name),
+    remove: (id: number): Promise<boolean> => ipcRenderer.invoke('albums:remove', id),
+    addImages: (albumId: number, imageIds: number[]): Promise<boolean> =>
+      ipcRenderer.invoke('albums:addImages', albumId, imageIds),
+    removeImage: (albumId: number, imageId: number): Promise<boolean> =>
+      ipcRenderer.invoke('albums:removeImage', albumId, imageId),
+    imageIds: (albumId: number): Promise<number[]> =>
+      ipcRenderer.invoke('albums:imageIds', albumId)
   },
   onScanProgress: (cb: (p: ScanProgress) => void) => {
     const listener = (_e: unknown, p: ScanProgress) => cb(p);

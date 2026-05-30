@@ -26,6 +26,8 @@ export interface Folder {
   last_scan_at: number | null;
 }
 
+export type ResolvedSource = 'user' | 'filename' | 'exif' | 'folder' | 'mtime';
+
 export interface ImageRow {
   id: number;
   folder_id: number;
@@ -37,11 +39,26 @@ export interface ImageRow {
   exif_taken_at: number | null;
   filename_taken_at: number | null;
   folder_taken_at: number | null;
+  user_taken_at: number | null;
   resolved_taken_at: number;
-  resolved_source: 'filename' | 'exif' | 'folder' | 'mtime';
+  resolved_source: ResolvedSource;
   width: number | null;
   height: number | null;
   thumb_status: 'pending' | 'ready' | 'error';
+  favorite: number;
+  phash: string | null;
+}
+
+export interface Album {
+  id: number;
+  name: string;
+  created_at: number;
+  image_count?: number;
+}
+
+export interface DuplicateGroup {
+  phash: string;
+  images: ImageRow[];
 }
 
 export function initDb(dbPath?: string): Database.Database {
@@ -70,22 +87,43 @@ export function initDb(dbPath?: string): Database.Database {
       exif_taken_at INTEGER,
       filename_taken_at INTEGER,
       folder_taken_at INTEGER,
+      user_taken_at INTEGER,
       resolved_taken_at INTEGER NOT NULL,
       resolved_source TEXT NOT NULL,
       width INTEGER,
       height INTEGER,
-      thumb_status TEXT NOT NULL DEFAULT 'pending'
+      thumb_status TEXT NOT NULL DEFAULT 'pending',
+      favorite INTEGER NOT NULL DEFAULT 0,
+      phash TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS albums (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS album_items (
+      album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+      image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+      added_at INTEGER NOT NULL,
+      PRIMARY KEY (album_id, image_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_images_resolved ON images(resolved_taken_at DESC);
     CREATE INDEX IF NOT EXISTS idx_images_folder ON images(folder_id);
+    CREATE INDEX IF NOT EXISTS idx_images_phash ON images(phash);
+    CREATE INDEX IF NOT EXISTS idx_album_items_image ON album_items(image_id);
   `);
 
-  // Migration: older DBs may not have folder_taken_at yet.
+  // Migrations: older DBs may be missing columns added over time. Each is
+  // idempotent - we only ALTER when the column is genuinely absent.
   const cols = db.prepare("PRAGMA table_info(images)").all() as { name: string }[];
-  if (!cols.some((c) => c.name === 'folder_taken_at')) {
-    db.exec('ALTER TABLE images ADD COLUMN folder_taken_at INTEGER');
-  }
+  const has = (c: string) => cols.some((x) => x.name === c);
+  if (!has('folder_taken_at')) db.exec('ALTER TABLE images ADD COLUMN folder_taken_at INTEGER');
+  if (!has('user_taken_at')) db.exec('ALTER TABLE images ADD COLUMN user_taken_at INTEGER');
+  if (!has('favorite')) db.exec('ALTER TABLE images ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0');
+  if (!has('phash')) db.exec('ALTER TABLE images ADD COLUMN phash TEXT');
 
   return db;
 }
@@ -160,13 +198,13 @@ export const imageQueries = {
   upsert(row: Omit<ImageRow, 'id'>): number {
     const stmt = getDb().prepare(`
       INSERT INTO images (folder_id, path, filename, ext, size, mtime,
-        exif_taken_at, filename_taken_at, folder_taken_at,
+        exif_taken_at, filename_taken_at, folder_taken_at, user_taken_at,
         resolved_taken_at, resolved_source,
-        width, height, thumb_status)
+        width, height, thumb_status, phash)
       VALUES (@folder_id, @path, @filename, @ext, @size, @mtime,
-        @exif_taken_at, @filename_taken_at, @folder_taken_at,
+        @exif_taken_at, @filename_taken_at, @folder_taken_at, @user_taken_at,
         @resolved_taken_at, @resolved_source,
-        @width, @height, @thumb_status)
+        @width, @height, @thumb_status, @phash)
       ON CONFLICT(path) DO UPDATE SET
         folder_id = excluded.folder_id,
         mtime = excluded.mtime,
@@ -174,10 +212,12 @@ export const imageQueries = {
         exif_taken_at = excluded.exif_taken_at,
         filename_taken_at = excluded.filename_taken_at,
         folder_taken_at = excluded.folder_taken_at,
+        user_taken_at = excluded.user_taken_at,
         resolved_taken_at = excluded.resolved_taken_at,
         resolved_source = excluded.resolved_source,
         width = excluded.width,
-        height = excluded.height
+        height = excluded.height,
+        phash = excluded.phash
       RETURNING id
     `);
     const r = stmt.get(row) as { id: number };
@@ -222,5 +262,87 @@ export const imageQueries = {
     });
     tx();
     return n;
+  },
+  deleteById(id: number): void {
+    getDb().prepare('DELETE FROM images WHERE id = ?').run(id);
+  },
+  setFavorite(id: number, favorite: boolean): void {
+    getDb().prepare('UPDATE images SET favorite = ? WHERE id = ?').run(favorite ? 1 : 0, id);
+  },
+  setPhash(id: number, phash: string): void {
+    getDb().prepare('UPDATE images SET phash = ? WHERE id = ?').run(phash, id);
+  },
+  /**
+   * Persist a manual capture-date override (or clear it with null) and
+   * recompute resolved_taken_at/source so the row immediately re-sorts.
+   * The recompute mirrors metadata.resolveDate's precedence but lives here
+   * to keep the write atomic; the caller passes the freshly resolved value.
+   */
+  setResolved(id: number, userTakenAt: number | null, resolvedTs: number, source: ResolvedSource): void {
+    getDb()
+      .prepare('UPDATE images SET user_taken_at = ?, resolved_taken_at = ?, resolved_source = ? WHERE id = ?')
+      .run(userTakenAt, resolvedTs, source, id);
+  },
+  /**
+   * Group images that share an identical perceptual hash. Exact-match
+   * grouping is O(n) and catches the dominant case for this app: the same
+   * file copied into several of the scattered folders the user imported.
+   */
+  duplicateGroups(): DuplicateGroup[] {
+    const dupHashes = getDb()
+      .prepare(
+        "SELECT phash FROM images WHERE phash IS NOT NULL GROUP BY phash HAVING COUNT(*) > 1"
+      )
+      .all() as { phash: string }[];
+    const byHash = getDb().prepare(
+      'SELECT * FROM images WHERE phash = ? ORDER BY size DESC, resolved_taken_at ASC'
+    );
+    return dupHashes.map((h) => ({
+      phash: h.phash,
+      images: byHash.all(h.phash) as ImageRow[]
+    }));
+  }
+};
+
+// --- album queries ---
+export const albumQueries = {
+  list(): Album[] {
+    return getDb()
+      .prepare(
+        `SELECT a.*, (SELECT COUNT(*) FROM album_items ai WHERE ai.album_id = a.id) AS image_count
+         FROM albums a ORDER BY a.created_at DESC`
+      )
+      .all() as Album[];
+  },
+  create(name: string): Album {
+    const info = getDb()
+      .prepare('INSERT INTO albums (name, created_at) VALUES (?, ?)')
+      .run(name, Date.now());
+    return { id: info.lastInsertRowid as number, name, created_at: Date.now(), image_count: 0 };
+  },
+  remove(id: number): void {
+    getDb().prepare('DELETE FROM albums WHERE id = ?').run(id);
+  },
+  addImages(albumId: number, imageIds: number[]): void {
+    const stmt = getDb().prepare(
+      'INSERT OR IGNORE INTO album_items (album_id, image_id, added_at) VALUES (?, ?, ?)'
+    );
+    const now = Date.now();
+    const tx = getDb().transaction(() => {
+      for (const imageId of imageIds) stmt.run(albumId, imageId, now);
+    });
+    tx();
+  },
+  removeImage(albumId: number, imageId: number): void {
+    getDb()
+      .prepare('DELETE FROM album_items WHERE album_id = ? AND image_id = ?')
+      .run(albumId, imageId);
+  },
+  imageIds(albumId: number): number[] {
+    return (
+      getDb()
+        .prepare('SELECT image_id FROM album_items WHERE album_id = ?')
+        .all(albumId) as { image_id: number }[]
+    ).map((r) => r.image_id);
   }
 };

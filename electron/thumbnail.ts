@@ -73,3 +73,46 @@ export async function generateFullPreview(imagePath: string, ext: string): Promi
   }
   return fs.readFile(imagePath);
 }
+
+/**
+ * Compute a 64-bit difference hash (dHash) for an image, returned as 16 hex
+ * chars. The image is reduced to greyscale 9x8 and each pixel is compared
+ * to its right neighbour, yielding 8x8 = 64 bits. Visually identical images
+ * (re-encodes, copies, minor resizes) collapse to the same or a very close
+ * hash, which the duplicate finder groups on. NEF goes through its embedded
+ * preview so RAW files hash consistently with their JPEG siblings.
+ */
+export async function perceptualHash(imagePath: string, ext: string): Promise<string | null> {
+  try {
+    let input: string | Buffer = imagePath;
+    if (ext === '.nef') {
+      const buf = await extractNefPreview(imagePath);
+      if (!buf) return null;
+      input = buf;
+    }
+    const { data } = await sharp(input, { failOn: 'none' })
+      .greyscale()
+      .resize(9, 8, { fit: 'fill' })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    // Row-major 9 wide x 8 tall. Compare each pixel with its right neighbour.
+    let hex = '';
+    for (let y = 0; y < 8; y++) {
+      let nibble = 0;
+      let bitsInNibble = 0;
+      for (let x = 0; x < 8; x++) {
+        const i = y * 9 + x;
+        nibble = (nibble << 1) | (data[i] > data[i + 1] ? 1 : 0);
+        if (++bitsInNibble === 4) {
+          hex += nibble.toString(16);
+          nibble = 0;
+          bitsInNibble = 0;
+        }
+      }
+    }
+    return hex;
+  } catch {
+    return null;
+  }
+}

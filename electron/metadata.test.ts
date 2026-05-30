@@ -101,6 +101,26 @@ describe('resolveDate', () => {
     expect(r.source).toBe('exif');
     expect(r.ts).toBe(exifNew);
   });
+
+  const userDate = new Date('2010-03-03T08:00:00').getTime();
+
+  it('manual override beats every automatic source', () => {
+    const r = resolveDate(filenameOld, exifNew, folderOld, mtime, userDate);
+    expect(r.source).toBe('user');
+    expect(r.ts).toBe(userDate);
+  });
+
+  it('manual override beats folder even when nothing else is set', () => {
+    const r = resolveDate(null, null, folderOld, mtime, userDate);
+    expect(r.source).toBe('user');
+    expect(r.ts).toBe(userDate);
+  });
+
+  it('ignores a null override and resolves normally', () => {
+    const r = resolveDate(null, exifNew, null, mtime, null);
+    expect(r.source).toBe('exif');
+    expect(r.ts).toBe(exifNew);
+  });
 });
 
 describe('parseFolderDate', () => {
