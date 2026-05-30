@@ -1,6 +1,6 @@
 import exifr from 'exifr';
 
-export type DateSource = 'filename' | 'exif' | 'folder' | 'mtime';
+export type DateSource = 'user' | 'filename' | 'exif' | 'folder' | 'mtime';
 
 export interface ResolvedDate {
   ts: number;
@@ -175,7 +175,7 @@ export async function readExifDate(filePath: string): Promise<number | null> {
       tiff: true,
       ifd0: true,
       exif: true
-    });
+    } as unknown as Parameters<typeof exifr.parse>[1]);
     if (!data) return null;
     const d: Date | undefined = data.DateTimeOriginal ?? data.CreateDate ?? data.ModifyDate;
     if (!d) return null;
@@ -200,13 +200,21 @@ const ONE_DAY_MS = 86_400_000;
  * When no folder date is detectable we fall back to the file itself:
  * EXIF, with the existing edited-file heuristic that promotes a
  * meaningfully older filename date over a suspiciously new EXIF.
+ *
+ * A manual user override, when present, beats every automatic source -
+ * it is the most deliberate signal possible and must never be overwritten
+ * by a later rescan.
  */
 export function resolveDate(
   filenameDate: number | null,
   exifDate: number | null,
   folderDate: number | null,
-  mtime: number
+  mtime: number,
+  userDate: number | null = null
 ): ResolvedDate {
+  if (userDate !== null) {
+    return { ts: userDate, source: 'user' };
+  }
   if (folderDate !== null) {
     return { ts: folderDate, source: 'folder' };
   }
@@ -224,7 +232,8 @@ export async function resolveImageDate(
   filePath: string,
   filename: string,
   mtime: number,
-  folderDate: number | null = null
+  folderDate: number | null = null,
+  userDate: number | null = null
 ): Promise<{
   resolved: ResolvedDate;
   exif: number | null;
@@ -234,7 +243,7 @@ export async function resolveImageDate(
   const fromName = parseFilenameDate(filename);
   const exif = await readExifDate(filePath);
   return {
-    resolved: resolveDate(fromName, exif, folderDate, mtime),
+    resolved: resolveDate(fromName, exif, folderDate, mtime, userDate),
     exif,
     fromName,
     fromFolder: folderDate
